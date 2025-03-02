@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Spheres with Three.js</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+        }
+        
+        #scene-container {
+            flex: 1;
+            position: relative;
+        }
+        
+        #controls-panel {
+            width: 300px;
+            background-color: #f5f5f5;
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0, 0, 0, 0.1);
+            overflow-y: auto;
+        }
+        
+        .control-group {
+            margin-bottom: 20px;
+        }
+        
+        .slider-container {
+            margin-bottom: 10px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+        }
+        
+        .value-display {
+            font-size: 0.8em;
+            color: #666;
+            text-align: right;
+        }
+        
+        button {
+            padding: 8px 15px;
+            margin: 5px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        button:hover {
+            background-color: #45a049;
+        }
+        
+        #timeline {
+            width: 100%;
+            margin-top: 10px;
+        }
+        
+        #play-controls {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        
+        #info-display {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div id="scene-container">
+        <div id="info-display">Click on spheres to interact</div>
+    </div>
+    
+    <div id="controls-panel">
+        <h2>Sphere Controls</h2>
+        
+        <div id="play-controls">
+            <button id="play-button">▶ Play</button>
+            <button id="stop-button">■ Stop</button>
+            <button id="reset-button">↺ Reset</button>
+        </div>
+        
+        <div class="control-group">
+            <label for="timeline">Timeline: <span id="timeline-value">0</span></label>
+            <input type="range" id="timeline" min="0" max="100" value="0">
+        </div>
+        
+        <div class="control-group">
+            <h3>Global Settings</h3>
+            <div class="slider-container">
+                <label for="global-size">Global Size: <span id="global-size-value">1.0</span></label>
+                <input type="range" id="global-size" min="0.1" max="3" step="0.1" value="1.0">
+            </div>
+            
+            <div class="slider-container">
+                <label for="animation-speed">Animation Speed: <span id="animation-speed-value">1.0</span></label>
+                <input type="range" id="animation-speed" min="0.1" max="3" step="0.1" value="1.0">
+            </div>
+            
+            <div class="slider-container">
+                <label for="particle-count">Particle Count: <span id="particle-count-value">100</span></label>
+                <input type="range" id="particle-count" min="10" max="500" step="10" value="100">
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <h3>Selected Sphere</h3>
+            <div id="selected-sphere-controls">
+                <p>No sphere selected</p>
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <h3>Actions</h3>
+            <button id="add-sphere">Add Random Sphere</button>
+            <button id="disintegrate-all">Disintegrate All</button>
+            <button id="restore-all">Restore All</button>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Main application class
+        class SphereApp {
+            constructor() {
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.spheres = [];
+                this.particles = [];
+                this.selectedSphere = null;
+                this.raycaster = new THREE.Raycaster();
+                this.mouse = new THREE.Vector2();
+                this.clock = new THREE.Clock();
+                this.isPlaying = false;
+                this.timeline = 0;
+                this.animationSpeed = 1.0;
+                
+                this.init();
+                this.setupControls();
+                this.animate();
+            }
+            
+            init() {
+                // Create scene
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x111111);
+                
+                // Create camera
+                this.camera = new THREE.PerspectiveCamera(
+                    75, 
+                    window.innerWidth / window.innerHeight, 
+                    0.1, 
+                    1000
+                );
+                this.camera.position.z = 20;
+                
+                // Create renderer
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.renderer.setSize(window.innerWidth - 300, window.innerHeight);
+                document.getElementById('scene-container').appendChild(this.renderer.domElement);
+                
+                // Add lights
+                const ambientLight = new THREE.AmbientLight(0x404040);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+                directionalLight.position.set(1, 1, 1);
+                this.scene.add(directionalLight);
+                
+                // Create initial spheres
+                this.createInitialSpheres();
+                
+                // Setup window resize handler
+                window.addEventListener('resize', () => this.onWindowResize(), false);
+                
+                // Setup click handler
+                this.renderer.domElement.addEventListener('click', (event) => this.onMouseClick(event), false);
+            }
+            
+            createInitialSpheres() {
+                const colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff];
+                
+                for (let i = 0; i < 5; i++) {
+                    const radius = Math.random() * 1 + 0.5;
+                    const geometry = new THREE.SphereGeometry(radius, 32, 32);
+                    const material = new THREE.MeshPhongMaterial({ 
+                        color: colors[i],
+                        shininess: 50,
+                        emissive: new THREE.Color(colors[i]).multiplyScalar(0.2)
+                    });
+                    
+                    const sphere = new THREE.Mesh(geometry, material);
+                    
+                    // Position spheres in a circular pattern
+                    const angle = (i / 5) * Math.PI * 2;
+                    sphere.position.x = Math.cos(angle) * 8;
+                    sphere.position.y = Math.sin(angle) * 8;
+                    sphere.position.z = 0;
+                    
+                    // Add custom properties
+                    sphere.userData = {
+                        id: i,
+                        originalRadius: radius,
+                        originalColor: colors[i],
+                        timeline: {
+                            size: [
+                                { time: 0, value: radius },
+                                { time: 50, value: radius * 2 },
+                                { time: 100, value: radius }
+                            ],
+                            visibility: [
+                                { time: 0, value: true },
+                                { time: 100, value: true }
+                            ]
+                        },
+                        visible: true,
+                        disintegrated: false
+                    };
+                    
+                    this.scene.add(sphere);
+                    this.spheres.push(sphere);
+                }
+            }
+            
+            setupControls() {
+                // Play/Stop buttons
+                document.getElementById('play-button').addEventListener('click', () => {
+                    this.isPlaying = true;
+                    this.clock.start();
+                });
+                
+                document.getElementById('stop-button').addEventListener('click', () => {
+                    this.isPlaying = false;
+                    this.clock.stop();
+                });
+                
+                document.getElementById('reset-button').addEventListener('click', () => {
+                    this.timeline = 0;
+                    document.getElementById('timeline').value = 0;
+                    document.getElementById('timeline-value').textContent = 0;
+                    this.updateSpheres();
+                });
+                
+                // Timeline slider
+                const timelineSlider = document.getElementById('timeline');
+                timelineSlider.addEventListener('input', (event) => {
+                    this.timeline = parseFloat(event.target.value);
+                    document.getElementById('timeline-value').textContent = this.timeline;
+                    this.updateSpheres();
+                });
+                
+                // Global size slider
+                const sizeSlider = document.getElementById('global-size');
+                sizeSlider.addEventListener('input', (event) => {
+                    const value = parseFloat(event.target.value);
+                    document.getElementById('global-size-value').textContent = value.toFixed(1);
+                    
+                    this.spheres.forEach(sphere => {
+                        if (!sphere.userData.disintegrated) {
+                            this.scaleSphere(sphere, value);
+                        }
+                    });
+                });
+                
+                // Animation speed slider
+                const speedSlider = document.getElementById('animation-speed');
+                speedSlider.addEventListener('input', (event) => {
+                    this.animationSpeed = parseFloat(event.target.value);
+                    document.getElementById('animation-speed-value').textContent = this.animationSpeed.toFixed(1);
+                });
+                
+                // Particle count slider
+                const particleSlider = document.getElementById('particle-count');
+                particleSlider.addEventListener('input', (event) => {
+                    const value = parseInt(event.target.value);
+                    document.getElementById('particle-count-value').textContent = value;
+                });
+                
+                // Add random sphere button
+                document.getElementById('add-sphere').addEventListener('click', () => {
+                    this.addRandomSphere();
+                });
+                
+                // Disintegrate all button
+                document.getElementById('disintegrate-all').addEventListener('click', () => {
+                    this.spheres.forEach(sphere => {
+                        if (!sphere.userData.disintegrated) {
+                            this.disintegrateSphere(sphere);
+                        }
+                    });
+                });
+                
+                // Restore all button
+                document.getElementById('restore-all').addEventListener('click', () => {
+                    this.restoreAllSpheres();
+                });
+            }
+            
+            addRandomSphere() {
+                const radius = Math.random() * 1 + 0.5;
+                const geometry = new THREE.SphereGeometry(radius, 32, 32);
+                
+                // Generate a random color
+                const color = new THREE.Color().setHSL(Math.random(), 0.8, 0.6);
+                const material = new THREE.MeshPhongMaterial({ 
+                    color: color,
+                    shininess: 50,
+                    emissive: color.clone().multiplyScalar(0.2)
+                });
+                
+                const sphere = new THREE.Mesh(geometry, material);
+                
+                // Random position in the scene
+                sphere.position.x = (Math.random() - 0.5) * 15;
+                sphere.position.y = (Math.random() - 0.5) * 15;
+                sphere.position.z = (Math.random() - 0.5) * 5;
+                
+                // Add custom properties
+                sphere.userData = {
+                    id: this.spheres.length,
+                    originalRadius: radius,
+                    originalColor: color.getHex(),
+                    timeline: {
+                        size: [
+                            { time: 0, value: 0 },
+                            { time: 20, value: radius * 1.5 },
+                            { time: 30, value: radius },
+                            { time: 100, value: radius }
+                        ],
+                        visibility: [
+                            { time: 0, value: true },
+                            { time: 100, value: true }
+                        ]
+                    },
+                    visible: true,
+                    disintegrated: false
+                };
+                
+                this.scene.add(sphere);
+                this.spheres.push(sphere);
+                
+                // Pop-in animation
+                sphere.scale.set(0, 0, 0);
+                this.animateSpherePopIn(sphere);
+            }
+            
+            animateSpherePopIn(sphere) {
+                const startScale = { x: 0, y: 0, z: 0 };
+                const endScale = { x: 1, y: 1, z: 1 };
+                
+                // Simple animation function
+                const duration = 500; // ms
+                const startTime = Date.now();
+                
+                const animate = () => {
+                    const elapsed = Date.now() - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    
+                    // Elastic easing function
+                    const t = progress;
+                    let scale;
+                    
+                    if (t < 0.5) {
+                        scale = 0.5 * Math.pow(2, 20 * t - 10) * Math.sin((20 * t - 11.125) * Math.PI / 4.5);
+                        scale = Math.max(scale, 0); // Ensure no negative scaling
+                    } else {
+                        scale = 1 - 0.5 * Math.pow(2, -20 * t + 10) * Math.sin((20 * t - 11.125) * Math.PI / 4.5);
+                    }
+                    
+                    sphere.scale.set(scale, scale, scale);
+                    
+                    if (progress < 1) {
+                        requestAnimationFrame(animate);
+                    }
+                };
+                
+                animate();
+            }
+            
+            disintegrateSphere(sphere) {
+                if (sphere.userData.disintegrated) return;
+                
+                const particleCount = parseInt(document.getElementById('particle-count-value').textContent);
+                const originalColor = sphere.material.color.clone();
+                const position = sphere.position.clone();
+                const radius = sphere.geometry.parameters.radius;
+                
+                // Mark as disintegrated and hide original sphere
+                sphere.userData.disintegrated = true;
+                sphere.visible = false;
+                
+                // Create particles
+                for (let i = 0; i < particleCount; i++) {
+                    const particleRadius = radius * 0.1;
+                    const geometry = new THREE.SphereGeometry(particleRadius, 8, 8);
+                    
+                    // Vary the particle color slightly
+                    const hsl = {};
+                    originalColor.getHSL(hsl);
+                    hsl.l = Math.min(1, hsl.l + Math.random() * 0.3);
+                    
+                    const material = new THREE.MeshPhongMaterial({ 
+                        color: new THREE.Color().setHSL(hsl.h, hsl.s, hsl.l),
+                        emissive: new THREE.Color().setHSL(hsl.h, hsl.s, hsl.l * 0.5)
+                    });
+                    
+                    const particle = new THREE.Mesh(geometry, material);
+                    
+                    // Position particle on the surface of the original sphere
+                    const phi = Math.acos(-1 + (2 * Math.random()));
+                    const theta = Math.random() * Math.PI * 2;
+                    
+                    particle.position.set(
+                        position.x + radius * Math.sin(phi) * Math.cos(theta),
+                        position.y + radius * Math.sin(phi) * Math.sin(theta),
+                        position.z + radius * Math.cos(phi)
+                    );
+                    
+                    // Add velocity for animation
+                    particle.userData = {
+                        velocity: new THREE.Vector3(
+                            (Math.random() - 0.5) * 0.1,
+                            (Math.random() - 0.5) * 0.1,
+                            (Math.random() - 0.5) * 0.1
+                        ),
+                        originalPosition: particle.position.clone(),
+                        parentSphereId: sphere.userData.id,
+                        life: 1.0
+                    };
+                    
+                    this.scene.add(particle);
+                    this.particles.push(particle);
+                }
+            }
+            
+            restoreAllSpheres() {
+                // Filter particles to remove and restore spheres
+                const particlesToRemove = [];
+                
+                this.spheres.forEach(sphere => {
+                    if (sphere.userData.disintegrated) {
+                        sphere.userData.disintegrated = false;
+                        sphere.visible = true;
+                        
+                        // Find particles for this sphere
+                        for (let i = 0; i < this.particles.length; i++) {
+                            if (this.particles[i].userData.parentSphereId === sphere.userData.id) {
+                                particlesToRemove.push(this.particles[i]);
+                            }
+                        }
+                        
+                        // Pop-in animation
+                        sphere.scale.set(0, 0, 0);
+                        this.animateSpherePopIn(sphere);
+                    }
+                });
+                
+                // Remove the particles from the scene and array
+                particlesToRemove.forEach(particle => {
+                    this.scene.remove(particle);
+                    const index = this.particles.indexOf(particle);
+                    if (index > -1) {
+                        this.particles.splice(index, 1);
+                    }
+                });
+            }
+            
+            onMouseClick(event) {
+                // Calculate mouse position in normalized device coordinates
+                const rect = this.renderer.domElement.getBoundingClientRect();
+                this.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+                this.mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+                
+                // Update the picking ray with the camera and mouse position
+                this.raycaster.setFromCamera(this.mouse, this.camera);
+                
+                // Calculate objects intersecting the picking ray
+                const intersects = this.raycaster.intersectObjects(this.spheres);
+                
+                if (intersects.length > 0) {
+                    const sphere = intersects[0].object;
+                    
+                    if (!sphere.userData.disintegrated) {
+                        // Set as selected sphere
+                        this.selectedSphere = sphere;
+                        
+                        // Update selected sphere controls
+                        this.updateSelectedSphereControls();
+                    }
+                } else {
+                    // Clicked outside any sphere
+                    this.selectedSphere = null;
+                    document.getElementById('selected-sphere-controls').innerHTML = '<p>No sphere selected</p>';
+                }
+            }
+            
+            updateSelectedSphereControls() {
+                if (!this.selectedSphere) return;
+                
+                const sphere = this.selectedSphere;
+                const controlsContainer = document.getElementById('selected-sphere-controls');
+                
+                // Clear previous controls
+                controlsContainer.innerHTML = '';
+                
+                // Create color control
+                const colorDiv = document.createElement('div');
+                colorDiv.className = 'slider-container';
+                
+                const colorLabel = document.createElement('label');
+                colorLabel.textContent = 'Color:';
+                colorDiv.appendChild(colorLabel);
+                
+                const colorInput = document.createElement('input');
+                colorInput.type = 'color';
+                colorInput.value = '#' + sphere.material.color.getHexString();
+                colorInput.style.width = '100%';
+                colorDiv.appendChild(colorInput);
+                
+                colorInput.addEventListener('input', (event) => {
+                    const color = new THREE.Color(event.target.value);
+                    sphere.material.color.set(color);
+                    sphere.material.emissive.copy(color).multiplyScalar(0.2);
+                });
+                
+                controlsContainer.appendChild(colorDiv);
+                
+                // Create size control
+                const sizeDiv = document.createElement('div');
+                sizeDiv.className = 'slider-container';
+                
+                const sizeLabel = document.createElement('label');
+                sizeLabel.innerHTML = `Size: <span id="sphere-size-value">${sphere.geometry.parameters.radius.toFixed(2)}</span>`;
+                sizeDiv.appendChild(sizeLabel);
+                
+                const sizeInput = document.createElement('input');
+                sizeInput.type = 'range';
+                sizeInput.min = '0.1';
+                sizeInput.max = '3';
+                sizeInput.step = '0.1';
+                sizeInput.value = sphere.geometry.parameters.radius;
+                sizeDiv.appendChild(sizeInput);
+                
+                sizeInput.addEventListener('input', (event) => {
+                    const value = parseFloat(event.target.value);
+                    document.getElementById('sphere-size-value').textContent = value.toFixed(2);
+                    this.resizeSphere(sphere, value);
+                });
+                
+                controlsContainer.appendChild(sizeDiv);
+                
+                // Create action buttons
+                const actionDiv = document.createElement('div');
+                actionDiv.style.marginTop = '15px';
+                
+                const popOutButton = document.createElement('button');
+                popOutButton.textContent = 'Pop Out';
+                popOutButton.addEventListener('click', () => {
+                    this.animateSpherePopOut(sphere);
+                });
+                actionDiv.appendChild(popOutButton);
+                
+                const disintegrateButton = document.createElement('button');
+                disintegrateButton.textContent = 'Disintegrate';
+                disintegrateButton.addEventListener('click', () => {
+                    this.disintegrateSphere(sphere);
+                    this.selectedSphere = null;
+                    document.getElementById('selected-sphere-controls').innerHTML = '<p>No sphere selected</p>';
+                });
+                actionDiv.appendChild(disintegrateButton);
+                
+                controlsContainer.appendChild(actionDiv);
+            }
+            
+            animateSpherePopOut(sphere) {
+                // Create a copy of the sphere data for the timeline
+                const originalSphere = sphere.userData.timeline.visibility;
+                
+                // Set the sphere to "pop out" at current timeline + 10
+                const popTime = Math.min(this.timeline + 10, 100);
+                
+                // Find or create visibility keyframes
+                let found = false;
+                for (let i = 0; i < originalSphere.length; i++) {
+                    if (originalSphere[i].time === popTime) {
+                        originalSphere[i].value = false;
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    // Insert a new keyframe, keeping the array sorted by time
+                    originalSphere.push({ time: popTime, value: false });
+                    originalSphere.sort((a, b) => a.time - b.time);
+                }
+                
+                // Also update size to make it pop out
+                const originalSize = sphere.userData.timeline.size;
+                
+                // Add size keyframes for popping out
+                const prePopTime = Math.max(0, popTime - 5);
+                const expandSize = sphere.geometry.parameters.radius * 1.5;
+                
+                // Update or add keyframes for pre-pop expansion
+                this.updateTimelineKeyframe(originalSize, prePopTime, expandSize);
+                
+                // Update or add keyframes for pop out (shrink to zero)
+                this.updateTimelineKeyframe(originalSize, popTime, 0);
+                
+                // If we're already past the pop time, update immediately
+                if (this.timeline >= popTime) {
+                    sphere.visible = false;
+                }
+            }
+            
+            updateTimelineKeyframe(timeline, time, value) {
+                // Find or create a keyframe at the specific time
+                let found = false;
+                for (let i = 0; i < timeline.length; i++) {
+                    if (timeline[i].time === time) {
+                        timeline[i].value = value;
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    // Insert a new keyframe, keeping the array sorted by time
+                    timeline.push({ time: time, value: value });
+                    timeline.sort((a, b) => a.time - b.time);
+                }
+            }
+            
+            resizeSphere(sphere, size) {
+                // Original geometry details
+                const oldGeometry = sphere.geometry;
+                const segmentCount = oldGeometry.parameters.widthSegments;
+                
+                // Create new geometry with new size
+                const newGeometry = new THREE.SphereGeometry(size, segmentCount, segmentCount);
+                
+                // Replace geometry
+                sphere.geometry.dispose();
+                sphere.geometry = newGeometry;
+            }
+            
+            scaleSphere(sphere, scaleFactor) {
+                const originalRadius = sphere.userData.originalRadius;
+                this.resizeSphere(sphere, originalRadius * scaleFactor);
+            }
+            
+            updateSpheres() {
+                // Update all spheres based on timeline
+                this.spheres.forEach(sphere => {
+                    if (sphere.userData.disintegrated) return;
+                    
+                    // Update visibility based on timeline
+                    const visibilityData = sphere.userData.timeline.visibility;
+                    sphere.visible = this.getValueAtTime(visibilityData, this.timeline);
+                    
+                    // Update size based on timeline
+                    if (sphere.visible) {
+                        const sizeData = sphere.userData.timeline.size;
+                        const size = this.getValueAtTime(sizeData, this.timeline);
+                        this.resizeSphere(sphere, size);
+                    }
+                });
+            }
+            
+            getValueAtTime(keyframes, time) {
+                // Handle empty keyframes
+                if (keyframes.length === 0) return null;
+                
+                // If time is before the first keyframe
+                if (time <= keyframes[0].time) {
+                    return keyframes[0].value;
+                }
+                
+                // If time is after the last keyframe
+                if (time >= keyframes[keyframes.length - 1].time) {
+                    return keyframes[keyframes.length - 1].value;
+                }
+                
+                // Find the keyframes before and after current time
+                let prevKeyframe = keyframes[0];
+                let nextKeyframe = keyframes[0];
+                
+                for (let i = 0; i < keyframes.length; i++) {
+                    if (keyframes[i].time <= time) {
+                        prevKeyframe = keyframes[i];
+                    }
+                    
+                    if (keyframes[i].time >= time && (nextKeyframe === prevKeyframe || keyframes[i].time < nextKeyframe.time)) {
+                        nextKeyframe = keyframes[i];
+                    }
+                }
+                
+                // If we found the exact time
+                if (prevKeyframe.time === time) {
+                    return prevKeyframe.value;
+                }
+                
+                // If we need to interpolate between two keyframes
+                if (prevKeyframe !== nextKeyframe) {
+                    // Check if the value type is a boolean (visibility)
+                    if (typeof prevKeyframe.value === 'boolean') {
+                        return prevKeyframe.value;
+                    }
+                    
+                    // Linear interpolation for numbers
+                    const t = (time - prevKeyframe.time) / (nextKeyframe.time - prevKeyframe.time);
+                    return prevKeyframe.value + t * (nextKeyframe.value - prevKeyframe.value);
+                }
+                
+                return prevKeyframe.value;
+            }
+            
+            updateParticles() {
+                // Update particle positions and fade them out over time
+                const particlesToRemove = [];
+                
+                this.particles.forEach(particle => {
+                    // Update position based on velocity
+                    particle.position.add(particle.userData.velocity);
+                    
+                    // Update velocity (add some gravity and random movement)
+                    particle.userData.velocity.y -= 0.001;
+                    particle.userData.velocity.x += (Math.random() - 0.5) * 0.002;
+                    particle.userData.velocity.z += (Math.random() - 0.5) * 0.002;
+                    
+                    // Decrease life
+                    particle.userData.life -= 0.005 * this.animationSpeed;
+                    
+                    // Scale and fade based on life
+                    const scale = particle.userData.life;
+                    particle.scale.set(scale, scale, scale);
+                    particle.material.opacity = scale;
+                    
+                    // Mark for removal if life is depleted
+                    if (particle.userData.life <= 0) {
+                        particlesToRemove.push(particle);
+                    }
+                });
+                
+                // Remove dead particles
+                particlesToRemove.forEach(particle => {
+                    this.scene.remove(particle);
+                    const index = this.particles.indexOf(particle);
+                    if (index > -1) {
+                        this.particles.splice(index, 1);
+                    }
+                });
+            }
+            
+            onWindowResize() {
+                this.camera.aspect = (window.innerWidth - 300) / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth - 300, window.innerHeight);
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                // Update timeline if playing
+                if (this.isPlaying) {
+                    const deltaTime = this.clock.getDelta() * this.animationSpeed;
+                    this.timeline += deltaTime * 10; // Scale to make it reasonable speed
+                    
+                    if (this.timeline > 100) {
+                        this.timeline = 0; // Loop back to start
+                    }
+                    
+                    // Update timeline slider
+                    document.getElementById('timeline').value = this.timeline;
+                    document.getElementById('timeline-value').textContent = this.timeline.toFixed(1);
+                    
+                    // Update spheres based on timeline
+                    this.updateSpheres();
+                }
+                
+                // Update particles
+                this.updateParticles();
+                
+                // Rotate spheres slightly for visual interest
+                this.spheres.forEach(sphere => {
+                    if (sphere.visible) {
+                        sphere.rotation.x += 0.005;
+                        sphere.rotation.y += 0.01;
+                    }
+                });
+                
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+        
+        // Start the application when the page loads
+        window.onload = () => {
+            const app = new SphereApp();
+        };
+    </script>
+</body>
+</html>
